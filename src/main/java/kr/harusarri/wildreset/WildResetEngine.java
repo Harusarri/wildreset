@@ -182,6 +182,20 @@ public final class WildResetEngine {
 
     public static void invalidateProtectionIndex() {
         lazyProtectionIndex = null;
+        WildResetConfig cfg = WildResetConfig.get();
+        if (!cfg.enabled || !cfg.lazyOnLoadResetEnabled) {
+            if (lazyPool != null) {
+                lazyPool.getQueue().clear();
+            }
+            lazyPreparedQueue.clear();
+            inFlightResetChunks.clear();
+            lazyPendingSendHoldChunks.clear();
+            for (CompletableFuture<Void> gate : lazySendGates.values()) {
+                gate.complete(null);
+            }
+            lazySendGates.clear();
+        }
+        CleanChunkCache.clearTransientGenerationCaches();
     }
 
     public static String getStatusSummary() {
@@ -495,7 +509,8 @@ public final class WildResetEngine {
         }
 
         if (currentPhase == Phase.IDLE) {
-            if (activeResetSeason > 0 && server.overworld() != null && ++playerWindowScanTickCounter >= 40) {
+            WildResetConfig cfg = WildResetConfig.get();
+            if (cfg.enabled && cfg.lazyOnLoadResetEnabled && activeResetSeason > 0 && server.overworld() != null && ++playerWindowScanTickCounter >= 40) {
                 playerWindowScanTickCounter = 0;
                 scanPlayerWindowForUnresetChunks(server.overworld());
             }
@@ -519,7 +534,7 @@ public final class WildResetEngine {
 
     private static void scanPlayerWindowForUnresetChunks(ServerLevel overworld) {
         WildResetConfig cfg = WildResetConfig.get();
-        if (!cfg.enabled || activeResetSeason <= 0) {
+        if (!cfg.enabled || !cfg.lazyOnLoadResetEnabled || activeResetSeason <= 0) {
             return;
         }
         List<ServerPlayer> players = overworld.players();
@@ -529,6 +544,10 @@ public final class WildResetEngine {
         YawpProtectionIndex idx = getOrCreateLazyIndex(overworld);
         Set<Long> scannedChunks = new HashSet<>();
         for (ServerPlayer player : players) {
+            if (player.getClass() != ServerPlayer.class) {
+                // Ignore Carpet fake benchmark bots (EntityPlayerMPFake)
+                continue;
+            }
             ChunkPos ppos = player.chunkPosition();
             for (int dx = -12; dx <= 12; dx++) {
                 for (int dz = -12; dz <= 12; dz++) {
@@ -683,13 +702,26 @@ public final class WildResetEngine {
      */
     public static void onChunkLoad(ServerLevel level, LevelChunk chunk, boolean generated) {
         WildResetConfig cfg = WildResetConfig.get();
-        if (!cfg.enabled || level != level.getServer().overworld()) {
+        if (!cfg.enabled || !cfg.lazyOnLoadResetEnabled || level != level.getServer().overworld()) {
             return;
         }
         if (activeResetSeason <= 0) {
             return;
         }
         ChunkPos pos = chunk.getPos();
+        boolean nearRealPlayer = false;
+        for (ServerPlayer p : level.players()) {
+            if (p.getClass() == ServerPlayer.class) {
+                ChunkPos pp = p.chunkPosition();
+                if (Math.abs(pp.x() - pos.x()) <= 16 && Math.abs(pp.z() - pos.z()) <= 16) {
+                    nearRealPlayer = true;
+                    break;
+                }
+            }
+        }
+        if (!nearRealPlayer) {
+            return;
+        }
         long packed = pos.pack();
 
         if (generated) {
@@ -780,7 +812,8 @@ public final class WildResetEngine {
      * so onEntityLoaded can evacuate them to True Ground.
      */
     public static boolean onAllowEntityLoad(Entity entity, ServerLevel level, EntitySpawnReason spawnReason, boolean loadedFromDisk) {
-        if (!loadedFromDisk || entity instanceof ServerPlayer || activeResetSeason <= 0) {
+        WildResetConfig cfg = WildResetConfig.get();
+        if (!cfg.enabled || !cfg.lazyOnLoadResetEnabled || !loadedFromDisk || entity instanceof ServerPlayer || activeResetSeason <= 0) {
             return true;
         }
         if (level != level.getServer().overworld()) {
@@ -893,6 +926,9 @@ public final class WildResetEngine {
             Path cacheDir = CleanChunkCache.getCacheRootDir(overworld);
             EvacuatedChestRegistry.save(cacheDir);
             saveSeasonState(cacheDir);
+            if (lazyPreparedQueue.isEmpty()) {
+                CleanChunkCache.clearTransientGenerationCaches();
+            }
         }
     }
 

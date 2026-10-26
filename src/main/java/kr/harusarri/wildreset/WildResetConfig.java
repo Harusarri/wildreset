@@ -41,6 +41,7 @@ public final class WildResetConfig {
     public int workerThreads = 4;
     public int mainThreadTickBudgetMs = 12;
     public int countdownSeconds = 3;
+    public boolean lazyOnLoadResetEnabled = false;
 
     public Messages messages = new Messages();
 

@@ -233,8 +233,27 @@ public final class CleanChunkCache {
     }
 
     public static void clearTransientGenerationCaches() {
+        STRUCTURE_STARTS_CACHE.clear();
         BASE_TERRAIN_CACHE.clear();
         DECORATED_CHUNK_CACHE.clear();
+    }
+
+    public static void trimTransientGenerationCachesIfNeeded() {
+        for (Map<Long, Map<Structure, StructureStart>> m : STRUCTURE_STARTS_CACHE.values()) {
+            if (m.size() > 256) {
+                m.clear();
+            }
+        }
+        for (ConcurrentHashMap<Long, CompletableFuture<BaseChunkData>> m : BASE_TERRAIN_CACHE.values()) {
+            if (m.size() > 64) {
+                m.clear();
+            }
+        }
+        for (ConcurrentHashMap<Long, CompletableFuture<DecoratedChunkData>> m : DECORATED_CHUNK_CACHE.values()) {
+            if (m.size() > 32) {
+                m.clear();
+            }
+        }
     }
 
     public static StructureManager getThreadIsolatedStructureManager() {
@@ -1221,6 +1240,7 @@ public final class CleanChunkCache {
             entityList.add(entityTag.copy());
         }
         written.put(NBT_WILDRESET_ENTITIES, entityList);
+        trimTransientGenerationCachesIfNeeded();
         return written;
     }
 
