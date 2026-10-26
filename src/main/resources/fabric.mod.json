@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "wildreset",
+  "version": "1.0.0+26.3",
+  "name": "WildReset",
+  "description": "Zero-Downtime / No-Limbo Wilderness Chunk Reset with YAWP Protection Exclusion, Container & Pet Surface Evacuation, 3-Day Lazy Protection, and Underground Ore Randomizer.",
+  "authors": [
+    "Harusarri"
+  ],
+  "contact": {
+    "homepage": "https://github.com/Harusarri/wildreset",
+    "sources": "https://github.com/Harusarri/wildreset",
+    "issues": "https://github.com/Harusarri/wildreset/issues"
+  },
+  "license": "MIT",
+  "icon": "assets/wildreset/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "kr.harusarri.wildreset.WildResetMod"
+    ]
+  },
+  "mixins": [
+    "wildreset.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": ">=26.3",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
