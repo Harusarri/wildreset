@@ -21,6 +21,7 @@
   "cmd.setcenter.success": "<green><bold>[WildReset]</bold> Spawn center coordinates saved as (<x>, <z>).</green>",
   "cmd.setradius.success": "<green><bold>[WildReset]</bold> Spawn reset radius saved as <radius> blocks.</green>",
   "cmd.cache.success": "<aqua><bold>[WildReset]</bold> Saved <count> clean chunk templates to cache (world/wildreset_cache/).</aqua>",
+  "cmd.cache.cleared": "<yellow><bold>[WildReset]</bold> Cleared <count> cached region file(s). Future resets will regenerate chunks fresh from the world seed.</yellow>",
   "cmd.run.failed": "<red>[WildReset] A reset is already in progress or no target chunks were found.</red>",
   "cmd.lang.current": "<gold><bold>[WildReset]</bold></gold> <gray>Language mode:</gray> <aqua><mode></aqua> <gray>(resolved: <white><resolved></white>) | Usage: /wildreset lang [auto|en_us|ko_kr]</gray>",
   "cmd.lang.changed": "<green><bold>[WildReset]</bold></green> <white>Language mode set to <aqua><mode></aqua> (active: <yellow><resolved></yellow>).</white>",

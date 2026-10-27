@@ -232,6 +232,26 @@ public final class CleanChunkCache {
         DECORATED_CHUNK_CACHE.clear();
     }
 
+    public static int clearDiskCache(ServerLevel level) {
+        int deleted = 0;
+        synchronized (STORAGE_LOCK) {
+            close();
+            Path regionDir = getCacheRootDir(level).resolve("region_v8");
+            if (Files.isDirectory(regionDir)) {
+                try (var stream = Files.list(regionDir)) {
+                    for (Path p : stream.toList()) {
+                        if (Files.isRegularFile(p) && Files.deleteIfExists(p)) {
+                            deleted++;
+                        }
+                    }
+                } catch (IOException e) {
+                    WildResetMod.LOGGER.warn("[WildReset] Failed to clear disk cache in {}", regionDir, e);
+                }
+            }
+        }
+        return deleted;
+    }
+
     public static void clearTransientGenerationCaches() {
         STRUCTURE_STARTS_CACHE.clear();
         BASE_TERRAIN_CACHE.clear();

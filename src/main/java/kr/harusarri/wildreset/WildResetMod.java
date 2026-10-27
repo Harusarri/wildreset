@@ -309,6 +309,19 @@ public final class WildResetMod implements ModInitializer {
                         )
                     )
                     .then(Commands.literal("cache")
+                        .then(Commands.literal("clear")
+                            .executes(ctx -> {
+                                ServerLevel overworld = ctx.getSource().getServer().overworld();
+                                int removed = CleanChunkCache.clearDiskCache(overworld);
+                                String lang = WildResetI18n.resolveLang(ctx.getSource());
+                                MiniText.sendCommandFeedback(
+                                    ctx.getSource(),
+                                    WildResetI18n.raw(lang, "cmd.cache.cleared"),
+                                    Map.of("count", String.valueOf(removed))
+                                );
+                                return 1;
+                            })
+                        )
                         .then(Commands.argument("radiusChunks", IntegerArgumentType.integer(1, 64))
                             .executes(ctx -> {
                                 int radiusChunks = IntegerArgumentType.getInteger(ctx, "radiusChunks");

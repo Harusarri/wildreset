@@ -21,6 +21,7 @@
   "cmd.setcenter.success": "<green><bold>[WildReset]</bold> 스폰 중심 좌표가 (<x>, <z>) 로 저장되었습니다.</green>",
   "cmd.setradius.success": "<green><bold>[WildReset]</bold> 스폰 리셋 반경이 <radius> 블록으로 저장되었습니다.</green>",
   "cmd.cache.success": "<aqua><bold>[WildReset]</bold> 초기 청크 캐시 <count>개 저장 완료 (world/wildreset_cache/).</aqua>",
+  "cmd.cache.cleared": "<yellow><bold>[WildReset]</bold> 청크 캐시 리전 파일 <count>개를 초기화했습니다. 다음 리셋부터 월드 시드 기준으로 새로 생성됩니다.</yellow>",
   "cmd.run.failed": "<red>[WildReset] 이미 리셋이 진행 중이거나 대상 청크가 없습니다.</red>",
   "cmd.lang.current": "<gold><bold>[WildReset]</bold></gold> <gray>언어 모드:</gray> <aqua><mode></aqua> <gray>(적용 언어: <white><resolved></white>) | 사용법: /wildreset lang [auto|en_us|ko_kr]</gray>",
   "cmd.lang.changed": "<green><bold>[WildReset]</bold></green> <white>언어 모드가 <aqua><mode></aqua>(으)로 변경되었습니다 (적용 언어: <yellow><resolved></yellow>).</white>",
