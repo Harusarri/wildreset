@@ -56,7 +56,7 @@ public final class WildResetConfig {
         public String bossBarStaging =
             "<gradient:#55ffff:#55aaff><bold>[야생 초기화 준비 중]</bold></gradient> <white>멀티스레드 백그라운드 청크 조립 중... <aqua><progress>%</aqua> (<done>/<total> 청크)</white>";
         public String bossBarCommitting =
-            "<gradient:#55ff55:#ffff55><bold>[야생 초기화 적용 중]</bold></gradient> <white>무중단 청크 덮어쓰기 및 지상 이전 중... <aqua><progress>%</aqua> (<done>/<total> 청크)</white>";
+            "<gradient:#55ffff:#55ff55><bold>[야생 초기화 진행 중]</bold></gradient> <white><aqua><progress>%</aqua> (<done>/<total> 청크) | <yellow><rate> 청크/s</yellow> | 남은 시간 <green><eta></green></white>";
         public String bossBarComplete =
             "<green><bold>[야생 초기화 완료]</bold></green> <white>스폰 야생 비보호 구역(<aqua><total>개 청크</aqua>)이 깨끗하게 초기화되었습니다! (상자 <yellow><chests>개</yellow>, 펫 <yellow><pets>마리</yellow> 지상 이전)</white>";
 
@@ -102,8 +102,13 @@ public final class WildResetConfig {
                     }
                     if (loaded.messages == null) {
                         loaded.messages = new Messages();
-                    } else if (loaded.messages.chestOwnerOpenActionBar == null) {
-                        loaded.messages.chestOwnerOpenActionBar = new Messages().chestOwnerOpenActionBar;
+                    } else {
+                        if (loaded.messages.chestOwnerOpenActionBar == null) {
+                            loaded.messages.chestOwnerOpenActionBar = new Messages().chestOwnerOpenActionBar;
+                        }
+                        if (loaded.messages.bossBarCommitting == null || !loaded.messages.bossBarCommitting.contains("<rate>")) {
+                            loaded.messages.bossBarCommitting = new Messages().bossBarCommitting;
+                        }
                     }
                     INSTANCE = loaded;
                     save();

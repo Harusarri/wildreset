@@ -141,6 +141,8 @@ public final class WildResetEngine {
     private static final ConcurrentLinkedQueue<PreparedChunk> lazyPreparedQueue = new ConcurrentLinkedQueue<>();
     private static final Map<Long, int[]> committedSurfaceHeights = new ConcurrentHashMap<>();
     private static final AtomicInteger stage1CompletedCount = new AtomicInteger(0);
+    private static int stage1DispatchIndex = 0;
+    private static int bossBarUpdateTickCounter = 0;
     private static int totalTargetChunks = 0;
     private static int stage2CommittedCount = 0;
     private static int totalEvacuatedChests = 0;
@@ -199,17 +201,24 @@ public final class WildResetEngine {
     }
 
     public static String getStatusSummary() {
-        return "Phase=" + currentPhase
-            + ", activeSeason=" + activeResetSeason
-            + ", seasonResetChunks=" + resetChunksInCurrentSeason.size()
-            + ", lazyOnLoadResets=" + totalLazyResetChunks.get()
-            + ", targets=" + totalTargetChunks
-            + ", stage1Prepared=" + stage1CompletedCount.get()
-            + ", stage2Committed=" + stage2CommittedCount
-            + ", evacuatedChests=" + totalEvacuatedChests
-            + ", evacuatedPets=" + totalEvacuatedPets
-            + ", expiredChestsSkipped=" + totalExpiredChestsRemoved
-            + ", randomizedDiamonds=" + totalRandomizedDiamonds;
+        double pct = totalTargetChunks > 0 ? (stage2CommittedCount * 100.0 / totalTargetChunks) : 0.0;
+        return String.format(java.util.Locale.ROOT,
+            "Phase=%s, activeSeason=%d, progress=%d/%d (%.1f%%), seasonResetChunks=%d, lazyOnLoadResets=%d, targets=%d, stage1Prepared=%d, stage2Committed=%d, evacuatedChests=%d, evacuatedPets=%d, expiredChestsSkipped=%d, randomizedDiamonds=%d",
+            currentPhase,
+            activeResetSeason,
+            stage2CommittedCount,
+            totalTargetChunks,
+            pct,
+            resetChunksInCurrentSeason.size(),
+            totalLazyResetChunks.get(),
+            totalTargetChunks,
+            stage1CompletedCount.get(),
+            stage2CommittedCount,
+            totalEvacuatedChests,
+            totalEvacuatedPets,
+            totalExpiredChestsRemoved,
+            totalRandomizedDiamonds
+        );
     }
 
     private static synchronized ThreadPoolExecutor ensureStage1Pool(WildResetConfig cfg) {
@@ -312,25 +321,9 @@ public final class WildResetEngine {
             lazyProtectionIndex = index;
         }
 
-        int centerCx = cfg.spawnCenterX >> 4;
-        int centerCz = cfg.spawnCenterZ >> 4;
-
-        Set<ChunkPos> targetSet = new LinkedHashSet<>();
-        if (radiusChunksOverride > 0) {
-            for (int cx = centerCx - radiusChunksOverride; cx <= centerCx + radiusChunksOverride; cx++) {
-                for (int cz = centerCz - radiusChunksOverride; cz <= centerCz + radiusChunksOverride; cz++) {
-                    if (index.isChunkResetTarget(cx, cz)) {
-                        targetSet.add(new ChunkPos(cx, cz));
-                    }
-                }
-            }
-        } else {
-            targetSet.addAll(collectLoadedTargetChunks(overworld, index));
-        }
-
-        List<ChunkPos> targets = new ArrayList<>(targetSet);
-        if (targets.isEmpty() && radiusChunksOverride > 0) {
-            LOGGER.warn("[WildReset] No target chunks found for targeted reset.");
+        List<ChunkPos> targets = collectSpiralTargetChunks(overworld, index);
+        if (targets.isEmpty()) {
+            LOGGER.warn("[WildReset] No target chunks found for reset.");
             return false;
         }
 
@@ -341,6 +334,8 @@ public final class WildResetEngine {
         targetChunks = targets;
         totalTargetChunks = targets.size();
         stage1CompletedCount.set(0);
+        stage1DispatchIndex = 0;
+        bossBarUpdateTickCounter = 0;
         stage2CommittedCount = 0;
         totalEvacuatedChests = 0;
         totalEvacuatedPets = 0;
@@ -368,8 +363,8 @@ public final class WildResetEngine {
             MiniText.sendChat(player, tpl, startPlaceholders);
         }
 
-        LOGGER.info("[WildReset] Reset started: {} loaded target chunks (full-radius lazy on-load enabled={}, protected+halo excluded={}), countdown={}s",
-            totalTargetChunks, radiusChunksOverride <= 0, index.keepChunkCount(), cfg.countdownSeconds);
+        LOGGER.info("[WildReset] Reset started: {} total target chunks in spiral order (protected+halo excluded={}), countdown={}s",
+            totalTargetChunks, index.keepChunkCount(), cfg.countdownSeconds);
         return true;
     }
 
@@ -407,61 +402,71 @@ public final class WildResetEngine {
         return null;
     }
 
-    private static Set<ChunkPos> collectLoadedTargetChunks(ServerLevel overworld, YawpProtectionIndex index) {
+    /**
+     * Collects all unprotected target chunks within the index bounds in Chunky-style outward square-spiral order,
+     * prioritizing any currently loaded chunks around online real players first.
+     */
+    private static List<ChunkPos> collectSpiralTargetChunks(ServerLevel overworld, YawpProtectionIndex index) {
         Set<ChunkPos> targetSet = new LinkedHashSet<>();
-        List<ServerPlayer> realPlayers = new ArrayList<>();
+
+        // 1. Prioritize active view window around online real players so visible chunks reset first
         for (ServerPlayer player : overworld.players()) {
-            if (player.getClass() == ServerPlayer.class) {
-                realPlayers.add(player);
+            if (player.getClass() != ServerPlayer.class) {
+                continue;
             }
-        }
-
-        if (!realPlayers.isEmpty()) {
-            // Focus synchronous Stage 1 quarantine reset on the active view window around real players
-            // so scattered fake benchmark bots or stale C2ME ItemHolder cache entries far away do not inflate Stage 1;
-            // all remaining chunks in the 5000-block radius reset seamlessly on-load / via proximity sweep.
-            for (ServerPlayer player : realPlayers) {
-                ChunkPos ppos = player.chunkPosition();
-                for (int dx = -16; dx <= 16; dx++) {
-                    for (int dz = -16; dz <= 16; dz++) {
-                        int cx = ppos.x() + dx;
-                        int cz = ppos.z() + dz;
-                        if (index.isChunkResetTarget(cx, cz) && resolveInMemoryLevelChunk(overworld, cx, cz) != null) {
-                            targetSet.add(new ChunkPos(cx, cz));
-                        }
+            ChunkPos ppos = player.chunkPosition();
+            for (int dx = -12; dx <= 12; dx++) {
+                for (int dz = -12; dz <= 12; dz++) {
+                    int cx = ppos.x() + dx;
+                    int cz = ppos.z() + dz;
+                    if (index.isChunkResetTarget(cx, cz)) {
+                        targetSet.add(new ChunkPos(cx, cz));
                     }
                 }
             }
-            for ( long forcedPacked : overworld.getForceLoadedChunks()) {
-                int cx = ChunkPos.getX(forcedPacked);
-                int cz = ChunkPos.getZ(forcedPacked);
-                if (index.isChunkResetTarget(cx, cz) && resolveInMemoryLevelChunk(overworld, cx, cz) != null) {
-                    targetSet.add(new ChunkPos(cx, cz));
-                }
-            }
-            return targetSet;
         }
 
-        if (overworld instanceof LoadedChunksCache loadedCache) {
-            for (LevelChunk lc : new ArrayList<>(loadedCache.fabric_getLoadedChunks())) {
-                if (lc == null) continue;
-                ChunkPos cpos = lc.getPos();
-                if (index.isChunkResetTarget(cpos.x(), cpos.z())) {
-                    targetSet.add(cpos);
+        // 2. Collect all remaining target chunks in outward square-spiral rings from (centerCx, centerCz)
+        int centerCx = index.centerX() >> 4;
+        int centerCz = index.centerZ() >> 4;
+        int maxRadius = Math.max(
+            Math.max(Math.abs(index.maxChunkX() - centerCx), Math.abs(centerCx - index.minChunkX())),
+            Math.max(Math.abs(index.maxChunkZ() - centerCz), Math.abs(centerCz - index.minChunkZ()))
+        );
+
+        if (index.isChunkResetTarget(centerCx, centerCz)) {
+            targetSet.add(new ChunkPos(centerCx, centerCz));
+        }
+
+        for (int r = 1; r <= maxRadius; r++) {
+            int minX = centerCx - r;
+            int maxX = centerCx + r;
+            int minZ = centerCz - r;
+            int maxZ = centerCz + r;
+
+            for (int cx = minX; cx <= maxX; cx++) {
+                if (index.isChunkResetTarget(cx, minZ)) {
+                    targetSet.add(new ChunkPos(cx, minZ));
+                }
+            }
+            for (int cz = minZ + 1; cz <= maxZ; cz++) {
+                if (index.isChunkResetTarget(maxX, cz)) {
+                    targetSet.add(new ChunkPos(maxX, cz));
+                }
+            }
+            for (int cx = maxX - 1; cx >= minX; cx--) {
+                if (index.isChunkResetTarget(cx, maxZ)) {
+                    targetSet.add(new ChunkPos(cx, maxZ));
+                }
+            }
+            for (int cz = maxZ - 1; cz >= minZ + 1; cz--) {
+                if (index.isChunkResetTarget(minX, cz)) {
+                    targetSet.add(new ChunkPos(minX, cz));
                 }
             }
         }
-        try {
-            overworld.getChunkSource().chunkMap.forEachReadyToSendChunk(lc -> {
-                if (lc != null) {
-                    ChunkPos cpos = lc.getPos();
-                    if (index.isChunkResetTarget(cpos.x(), cpos.z())) {
-                        targetSet.add(cpos);
-                    }
-                }
-            });
-        } catch (Throwable ignored) {}
-        return targetSet;
+
+        return new ArrayList<>(targetSet);
     }
 
     public static synchronized boolean startTargetedChunkReset(MinecraftServer server, List<ChunkPos> customTargets) {
@@ -479,6 +484,8 @@ public final class WildResetEngine {
         targetChunks = new ArrayList<>(customTargets);
         totalTargetChunks = targetChunks.size();
         stage1CompletedCount.set(0);
+        stage1DispatchIndex = 0;
+        bossBarUpdateTickCounter = 0;
         stage2CommittedCount = 0;
         totalEvacuatedChests = 0;
         totalEvacuatedPets = 0;
@@ -599,20 +606,13 @@ public final class WildResetEngine {
 
     private static void beginQuarantineAndStage1(MinecraftServer server) {
         WildResetConfig cfg = WildResetConfig.get();
-        currentPhase = Phase.STAGE1_WORKER_PREP;
         int season = EvacuatedChestRegistry.nextSeason();
         long nowMs = System.currentTimeMillis();
         long unlockAtMs = nowMs + cfg.chestProtectionHours * 3600_000L;
 
-        // Activate new season for full-radius lazy on-load chunk reset as well
         activeResetSeason = season;
         activeSeasonUnlockAtMs = unlockAtMs;
         if (activeRunRadiusOverride <= 0) {
-            // Re-collect currently loaded Overworld chunks at the end of the countdown;
-            // any chunks that unloaded during the countdown will be reset lazily on-load.
-            targetChunks = new ArrayList<>(collectLoadedTargetChunks(activeLevel, activeIndex));
-            totalTargetChunks = targetChunks.size();
-
             if (lazyPool != null) {
                 lazyPool.getQueue().clear();
             }
@@ -628,48 +628,33 @@ public final class WildResetEngine {
             lazyPreparedQueue.clear();
         }
 
-        // 1. Activate +10-Chunk Quarantine & In-Zone Packet Freeze
-        QuarantineAndFreezeManager.activateQuarantine(server, activeLevel, activeIndex);
+        stage1DispatchIndex = 0;
+        bossBarUpdateTickCounter = 0;
+        startTimeMs = System.currentTimeMillis();
+        currentPhase = Phase.STAGE2_MAIN_COMMIT;
+
+        // Only activate global quarantine freeze for small targeted runs (<= 256 chunks);
+        // for full Chunky-style background runs, players can move freely while chunks reset in a streaming window.
+        if (totalTargetChunks <= 256) {
+            QuarantineAndFreezeManager.activateQuarantine(server, activeLevel, activeIndex);
+        }
         QuarantineAndFreezeManager.updateBossBar(
             server,
-            "msg.bossbar.staging",
-            cfg.messages.bossBarStaging,
-            WildResetI18n.DEFAULT_KO_MESSAGES.bossBarStaging,
-            Map.of("progress", "0", "done", "0", "total", String.valueOf(totalTargetChunks)),
+            "msg.bossbar.committing",
+            cfg.messages.bossBarCommitting,
+            WildResetI18n.DEFAULT_KO_MESSAGES.bossBarCommitting,
+            Map.of(
+                "progress", "0.0",
+                "done", "0",
+                "total", String.valueOf(totalTargetChunks),
+                "rate", "0.0",
+                "eta", "--:--"
+            ),
             0.0f,
-            BossEvent.BossBarColor.BLUE
+            BossEvent.BossBarColor.YELLOW
         );
-
-        ThreadPoolExecutor pool = ensureStage1Pool(cfg);
-
-        for (ChunkPos pos : targetChunks) {
-            long packed = pos.pack();
-            inFlightResetChunks.add(packed);
-            List<CompoundTag> loadedBlockEntities = snapshotLoadedBlockEntitiesOnMainThread(activeLevel, pos);
-
-            // Generate/load clean chunk tag and read unloaded disk block_entities INSIDE stage1Pool so main thread never stalls
-            pool.submit(() -> {
-                try {
-                    List<CompoundTag> oldBlockEntities = loadedBlockEntities != null
-                        ? loadedBlockEntities
-                        : snapshotDiskBlockEntitiesInWorker(activeLevel, pos);
-                    CompoundTag cleanTag = CleanChunkCache.getOrGenerateCleanChunkTag(activeLevel, pos);
-                    PreparedChunk prepared = prepareChunkInWorker(
-                        activeLevel, pos, cleanTag, oldBlockEntities, unlockAtMs, season, cfg
-                    );
-                    if (prepared != null) {
-                        preparedQueue.add(prepared);
-                    } else {
-                        inFlightResetChunks.remove(packed);
-                    }
-                } catch (Throwable e) {
-                    inFlightResetChunks.remove(packed);
-                    LOGGER.error("[WildReset] Worker failed to prepare chunk {}", pos, e);
-                } finally {
-                    stage1CompletedCount.incrementAndGet();
-                }
-            });
-        }
+        LOGGER.info("[WildReset] Starting Chunky-style multi-threaded streaming reset for {} chunks (workerThreads={}, tickBudget={}ms)",
+            totalTargetChunks, cfg.workerThreads, cfg.mainThreadTickBudgetMs);
     }
 
     /**
@@ -813,7 +798,7 @@ public final class WildResetEngine {
      */
     public static boolean onAllowEntityLoad(Entity entity, ServerLevel level, EntitySpawnReason spawnReason, boolean loadedFromDisk) {
         WildResetConfig cfg = WildResetConfig.get();
-        if (!cfg.enabled || !cfg.lazyOnLoadResetEnabled || !loadedFromDisk || entity instanceof ServerPlayer || activeResetSeason <= 0) {
+        if (!cfg.enabled || !loadedFromDisk || entity instanceof ServerPlayer || activeResetSeason <= 0) {
             return true;
         }
         if (level != level.getServer().overworld()) {
@@ -825,9 +810,12 @@ public final class WildResetEngine {
         }
         ChunkPos pos = entity.chunkPosition();
         long packed = pos.pack();
+        if (entitySweptChunksInCurrentSeason.contains(packed)) {
+            return true;
+        }
         boolean isResetTarget = resetChunksInCurrentSeason.contains(packed)
             || inFlightResetChunks.contains(packed)
-            || getOrCreateLazyIndex(level).isChunkResetTarget(pos.x(), pos.z());
+            || (cfg.lazyOnLoadResetEnabled && getOrCreateLazyIndex(level).isChunkResetTarget(pos.x(), pos.z()));
         if (!isResetTarget) {
             return true;
         }
@@ -901,14 +889,14 @@ public final class WildResetEngine {
 
             long packed = prepared.pos().pack();
             LevelChunk live = commitPreparedChunkOnMainThread(overworld, prepared, cfg, false);
+            resetChunksInCurrentSeason.add(packed);
+            committedSurfaceHeights.put(packed, prepared.safeSurfaceYMap());
+            totalEvacuatedChests += prepared.evacuatedContainers().size();
+            totalRandomizedDiamonds += prepared.randomizedDiamonds();
+            totalLazyResetChunks.incrementAndGet();
+            dirtySeasonSaveCounter++;
             if (live != null) {
                 committedChunks.add(live);
-                resetChunksInCurrentSeason.add(packed);
-                committedSurfaceHeights.put(packed, prepared.safeSurfaceYMap());
-                totalEvacuatedChests += prepared.evacuatedContainers().size();
-                totalRandomizedDiamonds += prepared.randomizedDiamonds();
-                totalLazyResetChunks.incrementAndGet();
-                dirtySeasonSaveCounter++;
             } else {
                 CompletableFuture<Void> gate = lazySendGates.remove(packed);
                 if (gate != null) gate.complete(null);
@@ -1242,9 +1230,9 @@ public final class WildResetEngine {
     private static int findTrueGroundY(Map<Integer, LevelChunkSection> sectionMap, int lx, int lz, int minY, int maxY) {
         for (int y = maxY - 3; y >= minY + 1; y--) {
             BlockState floor = getBlockStateInSections(sectionMap, lx, y - 1, lz);
-            if (floor.isAir() || !floor.getFluidState().isEmpty()) continue;
+            if (floor.isAir()) continue;
             if (floor.is(BlockTags.LEAVES) || floor.is(BlockTags.LOGS) || floor.is(BlockTags.FENCES)) continue;
-            if (floor.is(Blocks.CACTUS) || floor.is(Blocks.MAGMA_BLOCK) || floor.is(Blocks.FIRE)) continue;
+            if (floor.is(Blocks.CACTUS) || floor.is(Blocks.MAGMA_BLOCK) || floor.is(Blocks.FIRE) || floor.is(Blocks.LAVA)) continue;
 
             BlockState feet = getBlockStateInSections(sectionMap, lx, y, lz);
             BlockState head = getBlockStateInSections(sectionMap, lx, y + 1, lz);
@@ -1300,6 +1288,59 @@ public final class WildResetEngine {
 
     private static void tickStage2MainCommit(MinecraftServer server) {
         WildResetConfig cfg = WildResetConfig.get();
+
+        // 1. Sliding-Window Multi-Threaded Worker Dispatch (Chunky-style bounded pipeline)
+        int maxInFlightWindow = Math.max(8, cfg.workerThreads * 6);
+        int dispatchedThisTick = 0;
+        ThreadPoolExecutor pool = ensureStage1Pool(cfg);
+        int season = activeResetSeason;
+        long unlockAtMs = activeSeasonUnlockAtMs;
+
+        while (stage1DispatchIndex < targetChunks.size()
+            && (inFlightResetChunks.size() + preparedQueue.size()) < maxInFlightWindow
+            && dispatchedThisTick < 16) {
+            ChunkPos pos = targetChunks.get(stage1DispatchIndex++);
+            dispatchedThisTick++;
+            long packed = pos.pack();
+            if (resetChunksInCurrentSeason.contains(packed)) {
+                stage1CompletedCount.incrementAndGet();
+                stage2CommittedCount++;
+                continue;
+            }
+            if (!inFlightResetChunks.add(packed)) {
+                continue;
+            }
+            List<CompoundTag> loadedBlockEntities = snapshotLoadedBlockEntitiesOnMainThread(activeLevel, pos);
+            pool.submit(() -> {
+                if (currentPhase != Phase.STAGE2_MAIN_COMMIT) {
+                    inFlightResetChunks.remove(packed);
+                    return;
+                }
+                try {
+                    List<CompoundTag> oldBlockEntities = loadedBlockEntities != null
+                        ? loadedBlockEntities
+                        : snapshotDiskBlockEntitiesInWorker(activeLevel, pos);
+                    CompoundTag cleanTag = CleanChunkCache.getOrGenerateCleanChunkTag(activeLevel, pos);
+                    PreparedChunk prepared = prepareChunkInWorker(
+                        activeLevel, pos, cleanTag, oldBlockEntities, unlockAtMs, season, cfg
+                    );
+                    if (prepared != null && currentPhase == Phase.STAGE2_MAIN_COMMIT) {
+                        preparedQueue.add(prepared);
+                    } else {
+                        inFlightResetChunks.remove(packed);
+                        stage2CommittedCount++;
+                    }
+                } catch (Throwable e) {
+                    inFlightResetChunks.remove(packed);
+                    stage2CommittedCount++;
+                    LOGGER.error("[WildReset] Worker failed to prepare chunk {}", pos, e);
+                } finally {
+                    stage1CompletedCount.incrementAndGet();
+                }
+            });
+        }
+
+        // 2. Main-Thread Tick-Budgeted Commit
         long deadlineNs = System.nanoTime() + (long) (cfg.mainThreadTickBudgetMs * 1_000_000L);
         List<LevelChunk> committedChunks = new ArrayList<>();
 
@@ -1311,37 +1352,73 @@ public final class WildResetEngine {
             LevelChunk live = commitPreparedChunkOnMainThread(activeLevel, prepared, cfg, true);
             if (live != null) {
                 committedChunks.add(live);
-                resetChunksInCurrentSeason.add(packed);
             }
+            resetChunksInCurrentSeason.add(packed);
             stage2CommittedCount++;
             totalEvacuatedChests += prepared.evacuatedContainers().size();
             totalRandomizedDiamonds += prepared.randomizedDiamonds();
             committedSurfaceHeights.put(packed, prepared.safeSurfaceYMap());
             inFlightResetChunks.remove(packed);
+            dirtySeasonSaveCounter++;
         }
 
         if (!committedChunks.isEmpty()) {
             relightAndBroadcastChunksOnMainThread(activeLevel, committedChunks);
         }
 
-        int pct = totalTargetChunks > 0 ? (stage2CommittedCount * 100 / totalTargetChunks) : 100;
-        QuarantineAndFreezeManager.updateBossBar(
-            server,
-            "msg.bossbar.committing",
-            cfg.messages.bossBarCommitting,
-            WildResetI18n.DEFAULT_KO_MESSAGES.bossBarCommitting,
-            Map.of(
-                "progress", String.valueOf(pct),
-                "done", String.valueOf(stage2CommittedCount),
-                "total", String.valueOf(totalTargetChunks)
-            ),
-            Math.clamp((float) stage2CommittedCount / (float) Math.max(1, totalTargetChunks), 0.0f, 1.0f),
-            BossEvent.BossBarColor.YELLOW
-        );
+        if (dirtySeasonSaveCounter >= 32) {
+            dirtySeasonSaveCounter = 0;
+            Path cacheDir = CleanChunkCache.getCacheRootDir(activeLevel);
+            EvacuatedChestRegistry.save(cacheDir);
+            saveSeasonState(cacheDir);
+            CleanChunkCache.trimTransientGenerationCachesIfNeeded();
+        }
 
-        if (preparedQueue.isEmpty()) {
+        // 3. Chunky-style Real-Time BossBar Update (Progress %, Done/Total, Chunks/s, ETA)
+        boolean allDone = stage1DispatchIndex >= targetChunks.size()
+            && inFlightResetChunks.isEmpty()
+            && preparedQueue.isEmpty();
+
+        if (++bossBarUpdateTickCounter >= 5 || allDone) {
+            bossBarUpdateTickCounter = 0;
+            int done = Math.min(stage2CommittedCount, totalTargetChunks);
+            double pctDouble = totalTargetChunks > 0 ? (done * 100.0 / totalTargetChunks) : 100.0;
+            long elapsedMs = Math.max(1L, System.currentTimeMillis() - startTimeMs);
+            double rate = (done * 1000.0) / elapsedMs;
+            int remaining = Math.max(0, totalTargetChunks - done);
+            String etaStr = rate > 0.05 ? formatEtaSeconds((long) Math.ceil(remaining / rate)) : "--:--";
+
+            QuarantineAndFreezeManager.updateBossBar(
+                server,
+                "msg.bossbar.committing",
+                cfg.messages.bossBarCommitting,
+                WildResetI18n.DEFAULT_KO_MESSAGES.bossBarCommitting,
+                Map.of(
+                    "progress", String.format(java.util.Locale.ROOT, "%.1f", pctDouble),
+                    "done", String.valueOf(done),
+                    "total", String.valueOf(totalTargetChunks),
+                    "rate", String.format(java.util.Locale.ROOT, "%.1f", rate),
+                    "eta", etaStr
+                ),
+                Math.clamp((float) done / (float) Math.max(1, totalTargetChunks), 0.0f, 1.0f),
+                BossEvent.BossBarColor.YELLOW
+            );
+        }
+
+        if (allDone) {
             finishReset(server);
         }
+    }
+
+    private static String formatEtaSeconds(long totalSeconds) {
+        if (totalSeconds < 0) return "--:--";
+        long hours = totalSeconds / 3600;
+        long minutes = (totalSeconds % 3600) / 60;
+        long seconds = totalSeconds % 60;
+        if (hours > 0) {
+            return String.format(java.util.Locale.ROOT, "%d:%02d:%02d", hours, minutes, seconds);
+        }
+        return String.format(java.util.Locale.ROOT, "%02d:%02d", minutes, seconds);
     }
 
     private static LevelChunk commitPreparedChunkOnMainThread(
@@ -1399,13 +1476,19 @@ public final class WildResetEngine {
             // 1b. Destroy & detach all Polymer Virtual Entity attachments (BlockBoundAttachment / ChunkAttachment displays)
             destroyPolymerVirtualEntitiesInChunk(level, liveChunk, pos);
 
-            // 2. Snap In-Zone Online Players Vertically FIRST (ClientboundPlayerPositionPacket)
+            // 2. Snap In-Zone Online Players Vertically FIRST if they would otherwise be buried underground
             Map<ServerPlayer, Integer> snappedPlayers = new LinkedHashMap<>();
             for (ServerPlayer player : level.players()) {
                 if (player.chunkPosition().equals(pos)) {
+                    if (player.isSpectator() || player.getAbilities().flying || player.isFallFlying()) {
+                        continue;
+                    }
                     int lx = player.getBlockX() & 15;
                     int lz = player.getBlockZ() & 15;
                     int[] safeCol = findNonChestColumnAndY(prepared, lx, lz);
+                    if (player.getBlockY() >= safeCol[2] && totalTargetChunks > 256) {
+                        continue;
+                    }
                     double targetX = (pos.x() << 4) + safeCol[0] + 0.5;
                     double targetY = safeCol[2];
                     double targetZ = (pos.z() << 4) + safeCol[1] + 0.5;
@@ -1924,6 +2007,10 @@ public final class WildResetEngine {
     }
 
     public static void abortReset() {
+        currentPhase = Phase.IDLE;
+        if (stage1Pool != null) {
+            stage1Pool.getQueue().clear();
+        }
         if (activeServer != null) {
             QuarantineAndFreezeManager.deactivateQuarantine(activeServer);
             QuarantineAndFreezeManager.scheduleHideBossBar(1);
@@ -1932,7 +2019,7 @@ public final class WildResetEngine {
             gate.complete(null);
         }
         lazySendGates.clear();
+        inFlightResetChunks.clear();
         preparedQueue.clear();
-        currentPhase = Phase.IDLE;
     }
 }

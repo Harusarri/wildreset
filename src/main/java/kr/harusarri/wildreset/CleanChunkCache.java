@@ -294,6 +294,9 @@ public final class CleanChunkCache {
         Map<Long, Map<Structure, StructureStart>> dimMap = STRUCTURE_STARTS_CACHE.computeIfAbsent(
             level.dimension(), d -> new ConcurrentHashMap<>()
         );
+        if (dimMap.size() > 1024) {
+            dimMap.clear();
+        }
         long key = ChunkPos.pack(cx, cz);
         Map<Structure, StructureStart> existing = dimMap.get(key);
         if (existing != null) {
@@ -446,7 +449,7 @@ public final class CleanChunkCache {
         ConcurrentHashMap<Long, CompletableFuture<BaseChunkData>> dimCache = BASE_TERRAIN_CACHE.computeIfAbsent(
             level.dimension(), d -> new ConcurrentHashMap<>()
         );
-        if (dimCache.size() > 8192) {
+        if (dimCache.size() > 128) {
             dimCache.clear();
         }
         long key = ChunkPos.pack(cx, cz);
@@ -862,7 +865,7 @@ public final class CleanChunkCache {
         ConcurrentHashMap<Long, CompletableFuture<DecoratedChunkData>> dimCache = DECORATED_CHUNK_CACHE.computeIfAbsent(
             level.dimension(), d -> new ConcurrentHashMap<>()
         );
-        if (dimCache.size() > 8192) {
+        if (dimCache.size() > 64) {
             dimCache.clear();
         }
         long key = ChunkPos.pack(cx, cz);

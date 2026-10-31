@@ -350,7 +350,7 @@ public final class WildResetMod implements ModInitializer {
                             }
                             return 1;
                         })
-                        .then(Commands.argument("radiusChunks", IntegerArgumentType.integer(1, 32))
+                        .then(Commands.argument("radiusChunks", IntegerArgumentType.integer(1, 512))
                             .executes(ctx -> {
                                 int radiusChunks = IntegerArgumentType.getInteger(ctx, "radiusChunks");
                                 boolean ok = WildResetEngine.startReset(ctx.getSource().getServer(), radiusChunks);
@@ -362,6 +362,30 @@ public final class WildResetMod implements ModInitializer {
                                 return 1;
                             })
                         )
+                    )
+                    .then(Commands.literal("cancel")
+                        .executes(ctx -> {
+                            String lang = WildResetI18n.resolveLang(ctx.getSource());
+                            if (WildResetEngine.getCurrentPhase() == WildResetEngine.Phase.IDLE) {
+                                ctx.getSource().sendFailure(MiniText.parse(WildResetI18n.raw(lang, "cmd.cancel.none")));
+                                return 0;
+                            }
+                            WildResetEngine.abortReset();
+                            MiniText.sendCommandFeedback(ctx.getSource(), WildResetI18n.raw(lang, "cmd.cancel.success"), Map.of());
+                            return 1;
+                        })
+                    )
+                    .then(Commands.literal("stop")
+                        .executes(ctx -> {
+                            String lang = WildResetI18n.resolveLang(ctx.getSource());
+                            if (WildResetEngine.getCurrentPhase() == WildResetEngine.Phase.IDLE) {
+                                ctx.getSource().sendFailure(MiniText.parse(WildResetI18n.raw(lang, "cmd.cancel.none")));
+                                return 0;
+                            }
+                            WildResetEngine.abortReset();
+                            MiniText.sendCommandFeedback(ctx.getSource(), WildResetI18n.raw(lang, "cmd.cancel.success"), Map.of());
+                            return 1;
+                        })
                     )
                     .then(Commands.literal("test-setup")
                         .executes(ctx -> runAutomatedDevServerTestSetup(ctx.getSource().getServer(), ctx.getSource()))
